@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智慧美食地圖 🍢</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<style>
+body{font-family:"Microsoft JhengHei";margin:0;background:#fffaf5}
+header{background:#ff7043;color:#fff;text-align:center;padding:15px;font-size:22px}
+.buttons{text-align:center;margin:15px}
+button{background:#ff7043;color:#fff;border:none;border-radius:10px;padding:10px 18px;margin:6px;cursor:pointer}
+button.secondary{background:#607d8b}
+button.logout{background:#9e9e9e}
+button:hover{opacity:.9}
+input{width:85%;padding:8px;border-radius:8px;border:1px solid #ccc;margin:5px 0}
+#map{height:70vh}
+.popup{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+background:#fff;border-radius:15px;padding:20px;z-index:999;width:90%;max-width:420px;max-height:80vh;overflow:auto}
+.menu-item{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding:8px}
+.close-btn{text-align:center;margin-top:10px}
+.comment{border-bottom:1px dashed #ddd;padding:6px 0;font-size:14px}
+.comment button{padding:3px 6px;font-size:12px;background:#ccc;color:#333;border-radius:6px}
+.star-btn{margin:2px;padding:5px 8px}
+</style>
+</head>
+
+<body>
+
+<header>🍢 智慧美食地圖</header>
+
+<div id="userStatus" style="text-align:center;margin:8px;color:#555">👤 尚未登入</div>
+
+<div class="buttons">
+<button onclick="openLogin()">登入</button>
+<button onclick="openRegister()">註冊</button>
+<button class="logout" onclick="logout()">登出</button>
+<button onclick="getLocation()">📍 開啟定位</button>
+<button class="secondary" onclick="openOrders()">📋 我的預購紀錄</button><br>
+<input id="searchInput" placeholder="搜尋食物">
+<button onclick="searchFood()">搜尋</button>
+</div>
+
+<div id="map"></div>
+
+<!-- 菜單 -->
+<div id="menuPopup" class="popup">
+<h3 id="storeName"></h3>
+<p id="storeTime"></p>
+
+<h4>⭐ 店家評分</h4>
+<div id="ratingArea"></div>
+
+<h4>💬 留言</h4>
+<div id="commentList"></div>
+<input id="commentInput" placeholder="留下你的評論">
+<button onclick="addComment()">送出留言</button>
+
+<h4>📋 菜單</h4>
+<ul id="menuList"></ul>
+
+<button class="close-btn" onclick="closeMenu()">關閉</button>
+</div>
+
+<!-- 預購 -->
+<div id="orderPopup" class="popup">
+<h3 id="orderItemName"></h3>
+<p>份數</p>
+<input type="number" id="orderQuantity" min="1" value="1">
+<p>取餐時間</p>
+<input type="time" id="pickupTime">
+<button onclick="confirmOrder()">確認預購</button>
+<button class="close-btn" onclick="closeOrder()">取消</button>
+</div>
+
+<!-- 訂單 -->
+<div id="orderListPopup" class="popup">
+<h3>📋 我的預購紀錄</h3>
+<div id="orderList"></div>
+<button class="close-btn" onclick="closeOrders()">關閉</button>
+</div>
+
+<!-- 登入 -->
+<div id="loginPopup" class="popup">
+<h3>🔐 使用者登入</h3>
+<input id="loginUser" placeholder="帳號">
+<input id="loginPass" type="password" placeholder="密碼">
+<button onclick="login()">登入</button>
+<button class="close-btn" onclick="closeLogin()">關閉</button>
+</div>
+
+<!-- 註冊 -->
+<div id="registerPopup" class="popup">
+<h3>📝 使用者註冊</h3>
+<input id="regUser" placeholder="帳號">
+<input id="regPass" type="password" placeholder="密碼">
+<button onclick="register()">註冊</button>
+<button class="close-btn" onclick="closeRegister()">關閉</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+let map,userMarker,userCircle,currentStall,currentOrderItem;
+let orders=JSON.parse(localStorage.getItem("orders")||"[]");
+let ratings=JSON.parse(localStorage.getItem("ratings")||"{}");
+let comments=JSON.parse(localStorage.getItem("comments")||"{}");
+let users=JSON.parse(localStorage.getItem("users")||"{}");
+let currentUser=localStorage.getItem("currentUser")||null;
+let stallMarkers=[];
+
+/* ===== 判斷營業 ===== */
+function isOpen(timeStr){
+const [o,c]=timeStr.split(" - ");
+const now=new Date();
+const n=now.getHours()*60+now.getMinutes();
+let [oh,om]=o.split(":").map(Number);
+let [ch,cm]=c.split(":").map(Number);
+let omm=oh*60+om,cmm=ch*60+cm;
+if(cmm<omm)cmm+=1440;
+const t=n<omm?n+1440:n;
+return t>=omm&&t<=cmm;
+}
+
+/* ===== 登入 ===== */
+function updateUserStatus(){
+userStatus.innerText=currentUser?"👤 目前登入者："+currentUser:"👤 尚未登入";
+}
+updateUserStatus();
+
+function openLogin(){loginPopup.style.display="block"}
+function closeLogin(){loginPopup.style.display="none"}
+function openRegister(){registerPopup.style.display="block"}
+function closeRegister(){registerPopup.style.display="none"}
+
+function register(){
+if(!regUser.value||!regPass.value)return alert("請輸入帳密");
+users[regUser.value]=regPass.value;
+localStorage.setItem("users",JSON.stringify(users));
+alert("註冊成功");
+closeRegister();
+}
+
+function login(){
+if(users[loginUser.value]===loginPass.value){
+currentUser=loginUser.value;
+localStorage.setItem("currentUser",currentUser);
+updateUserStatus();
+closeLogin();
+}else alert("帳密錯誤");
+}
+
+function logout(){
+currentUser=null;
+localStorage.removeItem("currentUser");
+updateUserStatus();
+}
+
+/* ===== 評分 ===== */
+function avgRating(name){
+const r=ratings[name]||[];
+return r.length?r.reduce((a,b)=>a+b,0)/r.length:0;
+}
+
+/* ===== 定位 ===== */
+function getLocation(){
+navigator.geolocation.getCurrentPosition(p=>{
+const lat=p.coords.latitude,lng=p.coords.longitude;
+map=L.map("map").setView([lat,lng],14);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+userMarker=L.circleMarker([lat,lng],{radius:8,color:"red",fillColor:"red",fillOpacity:1}).addTo(map);
+userCircle=L.circle([lat,lng],{radius:5000,color:"red",fillOpacity:0.1}).addTo(map);
+
+window.stalls=[
+{name:"阿明鹽酥雞",lat:lat+.03,lng:lng+.02,time:"17:00 - 00:00",menu:["鹽酥雞","甜不辣","地瓜薯條"]},
+{name:"珍珠奶茶攤",lat:lat-.04,lng:lng+.01,time:"10:00 - 22:00",menu:["珍珠奶茶","冬瓜檸檬","紅茶拿鐵"]},
+{name:"阿婆滷味",lat:lat+.02,lng:lng-.03,time:"16:00 - 23:00",menu:["滷豆干","滷蛋","滷海帶"]},
+{name:"幸福章魚燒",lat:lat+.01,lng:lng+.04,time:"15:30 - 22:30",menu:["章魚燒","明太子章魚燒"]},
+{name:"正宗牛肉麵",lat:lat-.02,lng:lng-.04,time:"11:00 - 20:30",menu:["紅燒牛肉麵","清燉牛肉麵"]}
+];
+renderStalls(lat,lng);
+});
+}
+
+/* ===== 店家顯示 ===== */
+function renderStalls(lat,lng){
+stallMarkers.forEach(s=>map.removeLayer(s.marker));
+stallMarkers=[];
+window.stalls.forEach(s=>{
+if(map.distance([lat,lng],[s.lat,s.lng])<=5000){
+const m=L.marker([s.lat,s.lng]).addTo(map)
+.bindPopup(`<b>${s.name}</b><br>
+⭐ 評分：${avgRating(s.name).toFixed(1)}<br>
+${s.time}<br>
+<button onclick="openMenu('${s.name}')">查看菜單</button>`);
+stallMarkers.push({name:s.name,menu:s.menu,marker:m});
+}
+});
+}
+
+/* ===== 搜尋 ===== */
+function searchFood(){
+const k=searchInput.value.trim();
+stallMarkers.forEach(s=>{
+const ok=s.name.includes(k)||s.menu.some(m=>m.includes(k));
+if(!k||ok)s.marker.addTo(map);
+else map.removeLayer(s.marker);
+});
+}
+
+/* ===== 菜單 ===== */
+function openMenu(name){
+currentStall=window.stalls.find(s=>s.name===name);
+storeName.innerText=name;
+storeTime.innerHTML="營業時間："+currentStall.time+"<br><b>"+(isOpen(currentStall.time)?"🟢 營業中":"🔴 休息中")+"</b>";
+
+const r=ratings[name]||[];
+ratingArea.innerHTML=`平均評分：${r.length?(r.reduce((a,b)=>a+b,0)/r.length).toFixed(1):"尚無"}<br>`+
+[1,2,3,4,5].map(n=>`<button class="star-btn" onclick="addRating(${n})">⭐${n}</button>`).join("");
+
+const c=comments[name]||[];
+commentList.innerHTML=c.length?c.map((t,i)=>`
+<div class="comment">💬 ${t}
+<button onclick="deleteComment(${i})">刪除</button></div>`).join(""):"尚無留言";
+
+menuList.innerHTML="";
+currentStall.menu.forEach(i=>{
+menuList.innerHTML+=`<li class="menu-item">${i}<button onclick="openOrder('${i}')">預購</button></li>`;
+});
+menuPopup.style.display="block";
+}
+
+function addRating(n){
+if(!ratings[currentStall.name])ratings[currentStall.name]=[];
+ratings[currentStall.name].push(n);
+localStorage.setItem("ratings",JSON.stringify(ratings));
+openMenu(currentStall.name);
+}
+
+function addComment(){
+if(!commentInput.value)return;
+if(!comments[currentStall.name])comments[currentStall.name]=[];
+comments[currentStall.name].push(commentInput.value);
+localStorage.setItem("comments",JSON.stringify(comments));
+commentInput.value="";
+openMenu(currentStall.name);
+}
+
+function deleteComment(i){
+comments[currentStall.name].splice(i,1);
+localStorage.setItem("comments",JSON.stringify(comments));
+openMenu(currentStall.name);
+}
+
+/* ===== 預購 ===== */
+function openOrder(i){
+currentOrderItem=i;
+orderItemName.innerText="預購："+i;
+orderPopup.style.display="block";
+}
+function confirmOrder(){
+orders.push({store:currentStall.name,item:currentOrderItem,qty:orderQuantity.value,time:pickupTime.value});
+localStorage.setItem("orders",JSON.stringify(orders));
+alert("預購成功");
+closeOrder();
+}
+function openOrders(){
+orderList.innerHTML=orders.length?orders.map(o=>`🏪 ${o.store}<br>🍽️ ${o.item} ×${o.qty}<br>⏰ ${o.time}<hr>`).join(""):"尚無紀錄";
+orderListPopup.style.display="block";
+}
+
+function closeMenu(){menuPopup.style.display="none"}
+function closeOrder(){orderPopup.style.display="none"}
+function closeOrders(){orderListPopup.style.display="none"}
+</script>
+
+</body>
+</html>
